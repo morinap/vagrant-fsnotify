@@ -11,9 +11,22 @@ module VagrantPlugins::Fsnotify
     def execute
       @logger = Log4r::Logger.new("vagrant::commands::fsnotify")
 
+      @options = {
+        notify_endpoint: nil,
+        skip_touch: false
+      }
+
       params = OptionParser.new do |o|
-        o.banner = "Usage: vagrant fsnotify [vm-name]"
+        o.banner = "Usage: vagrant fsnotify [-n|--notify-endpoint= The endpoint URL to notify of changes] [--skip-touch Skips the touch call] [vm-name]"
         o.separator ""
+
+        o.on('-nENDPOINT', '--notify-endpoint=ENDPOINT', 'Notify endpoint') do |n|
+          @options[:notify_endpoint] = n
+        end
+
+        o.on('--skip-touch', 'Skip touch') do |s|
+          @options[:skip_touch] = true
+        end
       end
 
       argv = parse_options(params)
@@ -199,11 +212,15 @@ MESSAGE
       end
 
       tosync.each do |machine, files|
-        machine.communicate.execute("touch -am '#{files.join("' '")}'")
+        machine.communicate.execute("touch -am '#{files.join("' '")}'") unless @options[:skip_touch]
+
         remove_from_this_machine = files & todelete
         unless remove_from_this_machine.empty?
-          machine.communicate.execute("rm -rf '#{remove_from_this_machine.join("' '")}'")
+          machine.communicate.execute("rm -rf '#{remove_from_this_machine.join("' '")}'") unless @options[:skip_touch]
         end
+
+
+        send_notify(machine, { modified: files, removed: removed_from_this_machine }) if @options[:notify_endpoint]
       end
 
     rescue => e
@@ -221,6 +238,14 @@ MESSAGE
 
       Regexp.new(exclude)
 
+    end
+
+    def send_notify(machine, files)
+      return unless @options[:notify_endpoint]
+
+      machine.communicate.execute("curl #{@options[:notify_endpoint]} -H 'Content-Type: application/json' -d '#{files.to_json}' 2>&1 >/dev/null &")
+    rescue => ex
+      @logger.error("#{e}: #{e.message}")
     end
 
   end
